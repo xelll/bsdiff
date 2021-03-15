@@ -118,7 +118,6 @@ struct patch_info_t
 {
 	uint32_t flag;
 	uint32_t new_version;
-	uint32_t max_section_size;
 
 	uint32_t old_size;
 	uint8_t old_sha256[32];

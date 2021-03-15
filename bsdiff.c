@@ -371,7 +371,6 @@ struct patch_info_t
 {
 	uint32_t flag;
 	uint32_t new_version;
-	uint32_t max_section_size;
 
 	uint32_t old_size;
 	uint8_t old_sha256[32];
@@ -387,7 +386,6 @@ struct lz4_section_hdr_t
 };
 
 int patch_file_size = 0;
-int max_section_size = 0;
 
 static int lz4_write(struct bsdiff_stream* stream, const void* buffer, int size)
 {
@@ -408,10 +406,6 @@ static int lz4_write(struct bsdiff_stream* stream, const void* buffer, int size)
 		char *temp = malloc(len);
 		if(NULL == temp)
 			err(1, "malloc");
-
-		if(len > max_section_size) {
-			max_section_size = len;
-		}
 
 		memset(temp, 0, len);
 		memcpy(&temp[0], (char *)buffer, size);
@@ -479,7 +473,6 @@ int main(int argc,char *argv[])
 	struct patch_info_t info;
 
 	info.flag = 0xA55AF00F;
-	info.max_section_size = 0;
 
 	info.new_size = newsize;
 	sha256_hash(new, newsize, info.new_sha256);
@@ -504,21 +497,12 @@ int main(int argc,char *argv[])
 	stream.opaque = pf;
 
 	patch_file_size = 0;
-	max_section_size = 0;
 
 	if (bsdiff(old, oldsize, new, newsize, &stream))
 		err(1, "bsdiff");
 
-	printf("max section size %d\n", max_section_size);
 
 	printf("patch file size %d\n", patch_file_size);
-
-	info.max_section_size = max_section_size;
-
-	if(0x0 != max_section_size) {
-		fseek(pf, 0, SEEK_SET);
-		fwrite((uint8_t *)&info, 1, sizeof(struct patch_info_t), pf);
-	}
 
 	if (fclose(pf))
 		err(1, "fclose");

@@ -365,6 +365,20 @@ int bsdiff(const uint8_t* old, int64_t oldsize, const uint8_t* new, int64_t news
 #include <lz4.h>
 #include "lz4hc.h"
 
+#include "sha256.h"
+
+struct patch_info_t
+{
+	uint32_t flag;
+	uint32_t new_version;
+	uint32_t max_section_size;
+
+	uint32_t old_size;
+	uint8_t old_sha256[32];
+	uint32_t new_size;
+	uint8_t new_sha256[32];
+};
+
 struct lz4_section_hdr_t
 {
 	uint32_t flag;
@@ -373,17 +387,18 @@ struct lz4_section_hdr_t
 };
 
 int patch_file_size = 0;
+int max_section_size = 0;
 
 static int lz4_write(struct bsdiff_stream* stream, const void* buffer, int size)
 {
 	FILE *fp = (FILE *)stream->opaque;
 
 	/* 
-		小于1K的块，直接写如patch
+		小于1K的块，直接写入patch
 	 	大于1K的块，进行lzma压缩，然后写入头部以及压缩后的内容
 	 */
 
-	if(1024 >= size) {
+	if((128 * 5) >= size) {
 		size_t n = fwrite(buffer, 1, size, fp);
 		if(n != size)
 			return -1;
@@ -393,6 +408,10 @@ static int lz4_write(struct bsdiff_stream* stream, const void* buffer, int size)
 		char *temp = malloc(len);
 		if(NULL == temp)
 			err(1, "malloc");
+
+		if(len > max_section_size) {
+			max_section_size = len;
+		}
 
 		memset(temp, 0, len);
 		memcpy(&temp[0], (char *)buffer, size);
@@ -404,6 +423,10 @@ static int lz4_write(struct bsdiff_stream* stream, const void* buffer, int size)
 		hdr.flag = 0xff5500AA;
 		hdr.org_size = size;
 		hdr.lz4_size = clen;
+
+		if(clen >= size) {
+			printf("%d > %d\n", clen, size);
+		}
 
 		fwrite((uint8_t *)&hdr, 1, sizeof(struct lz4_section_hdr_t), fp);
 
@@ -433,7 +456,7 @@ int main(int argc,char *argv[])
 	stream.free = free;
 	stream.write = lz4_write;
 
-	if(argc!=4) errx(1,"usage: %s oldfile newfile patchfile\n",argv[0]);
+	if(argc!=5) errx(1,"usage: %s oldfile newfile patchfile version\n",argv[0]);
 
 	/* Allocate oldsize+1 bytes instead of oldsize bytes to ensure
 		that we never try to malloc(0) and get a NULL pointer */
@@ -444,7 +467,6 @@ int main(int argc,char *argv[])
 		(read(fd,old,oldsize)!=oldsize) ||
 		(close(fd)==-1)) err(1,"%s",argv[1]);
 
-
 	/* Allocate newsize+1 bytes instead of newsize bytes to ensure
 		that we never try to malloc(0) and get a NULL pointer */
 	if(((fd=open(argv[2],O_RDONLY,0))<0) ||
@@ -454,9 +476,24 @@ int main(int argc,char *argv[])
 		(read(fd,new,newsize)!=newsize) ||
 		(close(fd)==-1)) err(1,"%s",argv[2]);
 
+	struct patch_info_t info;
+
+	info.flag = 0xA55AF00F;
+	info.max_section_size = 0;
+
+	info.new_size = newsize;
+	sha256_hash(new, newsize, info.new_sha256);
+
+	info.old_size = oldsize;
+	sha256_hash(old, oldsize, info.old_sha256);
+
+	info.new_version = (uint32_t)strtoul(argv[4], NULL, 0);
+
 	/* Create the patch file */
 	if ((pf = fopen(argv[3], "w")) == NULL)
 		err(1, "%s", argv[3]);
+
+	fwrite((uint8_t *)&info, 1, sizeof(struct patch_info_t), pf);
 
 	/* Write header (signature+newsize)*/
 	offtout(newsize, buf);
@@ -467,11 +504,21 @@ int main(int argc,char *argv[])
 	stream.opaque = pf;
 
 	patch_file_size = 0;
+	max_section_size = 0;
 
 	if (bsdiff(old, oldsize, new, newsize, &stream))
 		err(1, "bsdiff");
 
+	printf("max section size %d\n", max_section_size);
+
 	printf("patch file size %d\n", patch_file_size);
+
+	info.max_section_size = max_section_size;
+
+	if(0x0 != max_section_size) {
+		fseek(pf, 0, SEEK_SET);
+		fwrite((uint8_t *)&info, 1, sizeof(struct patch_info_t), pf);
+	}
 
 	if (fclose(pf))
 		err(1, "fclose");

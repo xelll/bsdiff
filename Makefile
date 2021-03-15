@@ -2,13 +2,11 @@
 
 all: bsdiff bspatch
 
-bsdiff: bsdiff.c
-	gcc bsdiff.c -o bsdiff -llz4
+bsdiff: bsdiff.c sha256.c
+	gcc -o bsdiff bsdiff.c sha256.c -llz4
 
-bspatch: lz4.c bspatch.c
-	gcc -c lz4.c -o lz4.o
-	gcc -c bspatch.c -o bspatch.o
-	gcc lz4.o bspatch.o -o bspatch
+bspatch: lz4.c sha256.c bspatch.c 
+	gcc -o bspatch lz4.c bspatch.c sha256.c
 
 clean:
 	rm -rf *.o bsdiff bspatch

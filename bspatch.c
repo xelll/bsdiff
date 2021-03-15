@@ -112,6 +112,20 @@ int bspatch(const uint8_t* old, int64_t oldsize, uint8_t* new, int64_t newsize, 
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "sha256.h"
+
+struct patch_info_t
+{
+	uint32_t flag;
+	uint32_t new_version;
+	uint32_t max_section_size;
+
+	uint32_t old_size;
+	uint8_t old_sha256[32];
+	uint32_t new_size;
+	uint8_t new_sha256[32];
+};
+
 struct lz4_section_hdr_t
 {
 	uint32_t flag;
@@ -125,7 +139,7 @@ static int lz4_read(const struct bspatch_stream* stream, void* buffer, int lengt
 {
 	FILE * f = (FILE *)stream->opaque;
 
-	if(1024 >= length) {
+	if((128 * 5) >= length) {
 		size_t n = fread(buffer, 1, length, f);
 		if (n != length)
 			return -1;
@@ -173,6 +187,10 @@ int main(int argc,char * argv[])
 	if ((f = fopen(argv[3], "r")) == NULL)
 		err(1, "fopen(%s)", argv[3]);
 
+	struct patch_info_t info;
+
+	fread((uint8_t *)&info, 1, sizeof(struct patch_info_t), f);
+
 	/* Read header */
 	if (fread(header, 1, 24, f) != 24) {
 		if (feof(f))
@@ -201,10 +219,31 @@ int main(int argc,char * argv[])
 
 	stream.read = lz4_read;
 	stream.opaque = f;
+
+	uint8_t sha256[32];
+
+	sha256_hash(old, oldsize, sha256);
+
+	if((0xA55AF00F != info.flag) ||
+		(newsize != info.new_size) ||
+		(oldsize != info.old_size) ||
+		(0x00 != memcmp(sha256, info.old_sha256, 32)))
+	{
+		err(1, "invaild patch file\n");
+	}
+
+	printf("new version %d\n", info.new_version);
+
 	if (bspatch(old, oldsize, new, newsize, &stream))
 		errx(1, "bspatch");
 
 	fclose(f);
+
+	sha256_hash(new, newsize, sha256);
+
+	if(0x00 != memcmp(sha256, info.new_sha256, 32)) {
+		fprintf(stderr, "patch faild\n");
+	}
 
 	/* Write the new file */
 	if(((fd=open(argv[2],O_CREAT|O_TRUNC|O_WRONLY,sb.st_mode))<0) ||
